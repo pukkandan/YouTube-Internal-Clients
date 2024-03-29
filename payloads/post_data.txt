@@ -3,8 +3,8 @@
         "client": {
             "hl": "en",
             "gl": "US",
-            "clientName": %clientName%,
-            "clientVersion": "%clientVersion%",
+            "clientName": %(clientName)s,
+            "clientVersion": "%(clientVersion)s",
             "clientScreen": "WATCH",
             "androidSdkVersion": 31
         },
@@ -12,7 +12,7 @@
             "embedUrl": "https://www.youtube.com/"
         }
     },
-    "videoId": "%videoId%",
+    "videoId": "%(videoId)s",
     "playbackContext": {
         "contentPlaybackContext": {
             "autonavState": "STATE_ON",

@@ -1,11 +1,22 @@
-import requests
+from itertools import islice
 import os
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
-client_versions = open("payloads/client_versions.txt", "r").readlines()
-data_template =  open("payloads/post_data.txt", "r").read()
+import requests
 
-innertube_hosts = [
+RETRIES = 3
+
+CLIENT_NAME_IDS = range(1, 120)
+with open("payloads/CLIENT_VERSIONS.txt", "r", encoding="utf-8") as f:
+    CLIENT_VERSIONS = list(filter(None, map(str.rstrip, f)))
+with open("payloads/post_data.txt", "r", encoding="utf-8") as f:
+    data_template = f.read().rstrip()
+if not os.path.exists('responses'):
+    os.makedirs('responses')
+
+INNERTUBE_HOSTS = [
     {
         "video_id": "vJz8QzO1VzQ", # normal video
         "domain": "www.youtube.com",
@@ -52,41 +63,60 @@ innertube_hosts = [
     }
 ]
 
-if not os.path.exists('responses'):
-    os.makedirs('responses')
+def run(variant):
+    host, client_name_id, client_version, id_ = variant
+    try_id = "_".join(map(str, (client_name_id, client_version, id_, host["domain"], host["key"])))
 
-requests_failed = 0
+    code, err = 0, None
+    for i in range(0, RETRIES + 1):
+        if i:
+            time.sleep(0.5)
 
-for client_name_id in range(1, 120):
-    for client_version in client_versions:
-        client_version = client_version.replace("\n", "").replace("\r", "")
-        if client_version == "":
-            continue
+        try:
+            response = requests.post(
+                f"https://{host['domain']}/youtubei/v1/player?key={host['key']}",
+                headers=host["headers"], timeout=5, data=data_template % {
+                    'videoId': host["video_id"],
+                    'clientName': client_name_id,
+                    'clientVersion': client_version,
+                })
+        except Exception as e:
+            code, err = 0, str(e)
+        else:
+            code, err = response.status_code, None
+            break
 
-        for i, host in enumerate(innertube_hosts):
+    if code == 200:
+        with open(f"responses/{try_id}.json", "w", encoding="utf-8") as f:
+            f.write(response.text)
 
-            try_id = str(client_name_id) + "_" + client_version + "_" + str(len(innertube_hosts) - i) + "_" + host["domain"] + "_" + host["key"]
+    return try_id, code, err
 
-            print("Try ClientId: " + str(client_name_id) + " ClientVersion: " + str(client_version) + " @ " + host["domain"] + " Failed Requests: " + str(requests_failed))
+_hosts_count = len(INNERTUBE_HOSTS)
+variants = [
+    (host, client_name_id, client_version, _hosts_count - i)
+    for client_name_id in CLIENT_NAME_IDS
+    for client_version in CLIENT_VERSIONS
+    for i, host in enumerate(INNERTUBE_HOSTS)
+]
+N = len(variants)
+start = int(sys.argv[1]) if sys.argv[1:] else 0
+if start:
+    print(f'Resuming after {start}')
+    variants = variants[start:]
 
-            data = data_template.replace("%videoId%", host["video_id"]).replace('%clientName%', str(client_name_id)).replace('%clientVersion%', client_version)
-
-            headers = host["headers"].copy()
-
-            for i in range(0, 4):
-                try:
-                    response = requests.post("https://" + host["domain"] + "/youtubei/v1/player?key=" + host["key"], data=data, headers=host["headers"], timeout=5)
-
-                    print("Response Code: " + str(response.status_code))
-
-                    if response.status_code == 200:
-                        out = open("responses/" + try_id + ".json", "w", encoding="utf-8")
-                        out.write(response.text)
-                        out.close()
-
-                    break
-                except Exception as ex:
-                    if i == 3:
-                        requests_failed += 1
-                    time.sleep(0.5)
-                    print(ex)
+valid = failed = invalid = 0
+with ThreadPoolExecutor() as pool:
+    tasks = pool.map(run, variants)
+    print("Tasks queued")
+    for i, (try_id, code, err) in enumerate(tasks, start + 1):
+        if err:
+            failed += 1
+            msg = f'Failed {err}'
+        elif code == 200:
+            valid += 1
+            msg = f'Success {code}'
+        else:
+            invalid += 1
+            msg = f'Invalid {code}'
+        print(f"[{i: 6}/{N} {i/N: 7.2%}] {try_id} {msg}. (Valid {valid} | Invalid {invalid} | Failed {failed})")
